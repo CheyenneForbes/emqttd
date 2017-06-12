@@ -43,6 +43,26 @@ handle_request(Method, "/status", Req) when Method =:= 'HEAD'; Method =:= 'GET' 
     Req:ok({"text/plain", iolist_to_binary(Status)});
 
 %%--------------------------------------------------------------------
+%% HTTP Subscribe API
+%%--------------------------------------------------------------------
+
+handle_request('POST', "/mqtt/subscribe", Req) ->
+    case authorized(Req) of
+        true  -> http_subscribe(Req);
+        false -> Req:respond({401, [], <<"Unauthorized">>})
+    end;
+
+%%--------------------------------------------------------------------
+%% HTTP Unsubscribe API
+%%--------------------------------------------------------------------
+
+handle_request('POST', "/mqtt/unsubscribe", Req) ->
+    case authorized(Req) of
+        true  -> http_unsubscribe(Req);
+        false -> Req:respond({401, [], <<"Unauthorized">>})
+    end;
+
+%%--------------------------------------------------------------------
 %% HTTP Publish API
 %%--------------------------------------------------------------------
 
@@ -63,6 +83,47 @@ handle_request('GET', "/" ++ File, Req) ->
 handle_request(Method, Path, Req) ->
     lager:error("Unexpected HTTP Request: ~s ~s", [Method, Path]),
     Req:not_found().
+
+%%--------------------------------------------------------------------
+%% HTTP Subscribe
+%%--------------------------------------------------------------------
+
+http_subscribe(Req) ->
+    Params = [{iolist_to_binary(Key), Val} || {Key, Val} <- mochiweb_request:parse_post(Req)],
+    lager:info("HTTP Subscribe: ~p", [Params]),
+    Topics   = topics(Params),
+    ClientId = get_value(<<"client">>, Params, http),
+    Qos      = int(get_value(<<"qos">>, Params, "0")),
+    case {validate(qos, Qos), validate(topics, Topics)} of
+        {true, true} ->
+            lists:foreach(fun(Topic) ->
+                emqttd:subscribe(Topic, ClientId, [{qos, Qos}])
+            end, Topics),
+            Req:ok({"text/plain", <<"OK">>});
+       {false, _} ->
+            Req:respond({400, [], <<"Bad QoS">>});
+        {_, false} ->
+            Req:respond({400, [], <<"Bad Topics">>})
+    end.
+
+%%--------------------------------------------------------------------
+%% HTTP Unsubscribe
+%%--------------------------------------------------------------------
+
+http_unsubscribe(Req) ->
+    Params = [{iolist_to_binary(Key), Val} || {Key, Val} <- mochiweb_request:parse_post(Req)],
+    lager:info("HTTP Unsubscribe: ~p", [Params]),
+    Topics   = topics(Params),
+    ClientId = get_value(<<"client">>, Params, http),
+    case {validate(qos, Qos), validate(topics, Topics)} of
+        {true, true} ->
+            lists:foreach(fun(Topic) ->
+                emqttd:unsubscribe(Topic, ClientId)
+            end, Topics),
+            Req:ok({"text/plain", <<"OK">>});
+        {_, false} ->
+            Req:respond({400, [], <<"Bad Topics">>})
+    end.
 
 %%--------------------------------------------------------------------
 %% HTTP Publish
